@@ -129,15 +129,14 @@ class AuxAttrLoss(nn.Module):
         self.clip_model = clip_model
         self.probe      = probe
         self.lam        = lam
-        self.register_buffer('_mean', _CLIP_MEAN.view(1, 3, 1, 1))
-        self.register_buffer('_std',  _CLIP_STD.view(1, 3, 1, 1))
 
     def _to_clip(self, x: torch.Tensor) -> torch.Tensor:
         """[-1,1] 64×64 tensor → CLIP-normalised 224×224."""
-        x = (x + 1.0) / 2.0                                          # [0,1]
-        x = F.interpolate(x, size=(224, 224), mode='bilinear',
-                          align_corners=False)
-        return (x - self._mean) / self._std
+        x    = (x + 1.0) / 2.0
+        x    = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
+        mean = _CLIP_MEAN.view(1, 3, 1, 1).to(x.device)
+        std  = _CLIP_STD.view(1, 3, 1, 1).to(x.device)
+        return (x - mean) / std
 
     def forward(self, recon: torch.Tensor,
                 target_attrs: torch.Tensor) -> torch.Tensor:
