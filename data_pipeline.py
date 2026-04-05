@@ -124,7 +124,8 @@ class CelebADataset(Dataset):
 def make_dataloader(root: str, split: str = "train",
                     download: bool = False,
                     batch_size: int = 64,
-                    num_workers: int = 2) -> DataLoader:
+                    num_workers: int = 2,
+                    pin_memory: bool = True) -> DataLoader:
     """
     Returns a DataLoader for the requested split.
 
@@ -137,7 +138,7 @@ def make_dataloader(root: str, split: str = "train",
         batch_size=batch_size,
         shuffle=(split == "train"),
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
         persistent_workers=(num_workers > 0),
         drop_last=True,   # keeps batch size constant; important for BatchNorm
     )
