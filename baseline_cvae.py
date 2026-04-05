@@ -210,7 +210,12 @@ def load_checkpoint(path: str, model: BaselineCVAE,
 
 def train_one_epoch(model: BaselineCVAE, loader: DataLoader,
                     optimizer: torch.optim.Optimizer,
-                    device: torch.device) -> dict:
+                    device: torch.device,
+                    scaler=None) -> dict:
+    """
+    scaler: pass a torch.cuda.amp.GradScaler instance to enable AMP (fp16).
+            Pass None to use full fp32.
+    """
     model.train()
     sums = {'total': 0., 'recon': 0., 'kl': 0.}
     n = 0
@@ -220,11 +225,20 @@ def train_one_epoch(model: BaselineCVAE, loader: DataLoader,
         attrs  = attrs.to(device,  non_blocking=True)
 
         optimizer.zero_grad()
-        recon, mu, logvar = model(images, attrs)
-        losses = model.loss(images, recon, mu, logvar)
-        losses['total'].backward()
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-        optimizer.step()
+        with torch.autocast(device_type='cuda', enabled=(scaler is not None)):
+            recon, mu, logvar = model(images, attrs)
+            losses = model.loss(images, recon, mu, logvar)
+
+        if scaler is not None:
+            scaler.scale(losses['total']).backward()
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            losses['total'].backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
 
         for k in sums:
             sums[k] += losses[k].item()

@@ -212,7 +212,12 @@ def warmstart_from_phase1(model: FullCVAE, phase1_ckpt_path: str,
 
 def train_one_epoch(model: FullCVAE, loader: DataLoader,
                     optimizer: torch.optim.Optimizer,
-                    device: torch.device) -> dict:
+                    device: torch.device,
+                    scaler=None) -> dict:
+    """
+    scaler: pass a torch.cuda.amp.GradScaler instance to enable AMP (fp16).
+            Pass None to use full fp32.
+    """
     model.train()
     sums = {'total': 0., 'recon': 0., 'kl': 0.}
     n = 0
@@ -222,11 +227,20 @@ def train_one_epoch(model: FullCVAE, loader: DataLoader,
         attrs  = attrs.to(device,  non_blocking=True)
 
         optimizer.zero_grad()
-        recon, mu, logvar = model(images, attrs)   # photo=images implicitly
-        losses = model.loss(images, recon, mu, logvar)
-        losses['total'].backward()
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-        optimizer.step()
+        with torch.autocast(device_type='cuda', enabled=(scaler is not None)):
+            recon, mu, logvar = model(images, attrs)
+            losses = model.loss(images, recon, mu, logvar)
+
+        if scaler is not None:
+            scaler.scale(losses['total']).backward()
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            losses['total'].backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
 
         for k in sums:
             sums[k] += losses[k].item()
