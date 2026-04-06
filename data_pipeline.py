@@ -78,7 +78,7 @@ class CelebADataset(Dataset):
         transform: Optional override for image transforms.
     """
 
-    IMAGE_SIZE = 64  # starting resolution
+    IMAGE_SIZE = 128  # Phase 5 resolution
 
     def __init__(self, root: str, split: str = "train",
                  download: bool = False, transform=None):
@@ -98,8 +98,8 @@ class CelebADataset(Dataset):
     @staticmethod
     def _default_transform():
         return transforms.Compose([
-            transforms.Resize(72),           # slightly larger before crop
-            transforms.CenterCrop(64),       # 64x64 center crop
+            transforms.Resize(144),          # slightly larger before crop
+            transforms.CenterCrop(128),      # 128x128 center crop (Phase 5)
             transforms.ToTensor(),           # [0,1]
             transforms.Normalize(
                 mean=[0.5, 0.5, 0.5],
@@ -123,14 +123,17 @@ class CelebADataset(Dataset):
 
 def make_dataloader(root: str, split: str = "train",
                     download: bool = False,
-                    batch_size: int = 64,
+                    batch_size: int = 128,
                     num_workers: int = 2,
-                    pin_memory: bool = True) -> DataLoader:
+                    pin_memory: bool = True,
+                    prefetch_factor: int = 4,
+                    persistent_workers: bool = True) -> DataLoader:
     """
     Returns a DataLoader for the requested split.
 
     pin_memory=True accelerates host→GPU transfers on Colab's T4.
     persistent_workers=True avoids re-spawning workers each epoch.
+    prefetch_factor controls how many batches each worker pre-loads.
     """
     dataset = CelebADataset(root=root, split=split, download=download)
     loader = DataLoader(
@@ -139,8 +142,9 @@ def make_dataloader(root: str, split: str = "train",
         shuffle=(split == "train"),
         num_workers=num_workers,
         pin_memory=pin_memory,
-        persistent_workers=(num_workers > 0),
-        drop_last=True,   # keeps batch size constant; important for BatchNorm
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        persistent_workers=(persistent_workers and num_workers > 0),
+        drop_last=True,
     )
     return loader
 
