@@ -72,17 +72,18 @@ class CelebADataset(Dataset):
     - Apply consistent image transforms (resize, center-crop, normalize to [-1,1])
 
     Args:
-        root:      Directory that contains (or will contain) the celeba/ folder.
-        split:     'train', 'valid', or 'test'.
-        download:  Whether to attempt automatic download (may fail due to GDrive limits).
-        transform: Optional override for image transforms.
+        root:       Directory that contains (or will contain) the celeba/ folder.
+        split:      'train', 'valid', or 'test'.
+        download:   Whether to attempt automatic download (may fail due to GDrive limits).
+        image_size: Square output resolution. Pass 64 for Phase 4 (FullCVAEv2),
+                    128 for Phase 5+ (FullCVAEv3). Default 128.
+        transform:  Optional full override for image transforms.
     """
 
-    IMAGE_SIZE = 128  # Phase 5 resolution
-
     def __init__(self, root: str, split: str = "train",
-                 download: bool = False, transform=None):
-        self.transform = transform or self._default_transform()
+                 download: bool = False, image_size: int = 128, transform=None):
+        self.image_size = image_size
+        self.transform  = transform or self._default_transform(image_size)
 
         # NOTE: torchvision CelebA download can fail with "Too many requests" from
         # Google Drive. If that happens, download manually from Kaggle
@@ -96,10 +97,13 @@ class CelebADataset(Dataset):
         )
 
     @staticmethod
-    def _default_transform():
+    def _default_transform(image_size: int = 128):
+        # Crop to a slightly larger size first, then center-crop to exact resolution.
+        # This removes the black borders that appear in some CelebA images.
+        load_size = int(image_size * 1.125)   # e.g. 72 for 64px, 144 for 128px
         return transforms.Compose([
-            transforms.Resize(144),          # slightly larger before crop
-            transforms.CenterCrop(128),      # 128x128 center crop (Phase 5)
+            transforms.Resize(load_size),
+            transforms.CenterCrop(image_size),
             transforms.ToTensor(),           # [0,1]
             transforms.Normalize(
                 mean=[0.5, 0.5, 0.5],
@@ -123,6 +127,7 @@ class CelebADataset(Dataset):
 
 def make_dataloader(root: str, split: str = "train",
                     download: bool = False,
+                    image_size: int = 128,
                     batch_size: int = 128,
                     num_workers: int = 2,
                     pin_memory: bool = True,
@@ -131,11 +136,13 @@ def make_dataloader(root: str, split: str = "train",
     """
     Returns a DataLoader for the requested split.
 
-    pin_memory=True accelerates host→GPU transfers on Colab's T4.
-    persistent_workers=True avoids re-spawning workers each epoch.
-    prefetch_factor controls how many batches each worker pre-loads.
+    image_size:          Output resolution. Pass 64 for Phase 4, 128 for Phase 5+.
+    pin_memory:          Accelerates host→GPU transfers on Colab's T4.
+    persistent_workers:  Avoids re-spawning workers each epoch.
+    prefetch_factor:     How many batches each worker pre-loads.
     """
-    dataset = CelebADataset(root=root, split=split, download=download)
+    dataset = CelebADataset(root=root, split=split, download=download,
+                            image_size=image_size)
     loader = DataLoader(
         dataset,
         batch_size=batch_size,

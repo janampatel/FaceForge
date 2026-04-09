@@ -1,12 +1,14 @@
-# full_cvae_v3.py — Phase 5: Resolution upgrade to 128×128
+# full_cvae_v3.py — Phase 5+6: Resolution upgrade to 128×128 + Perceptual Loss
 #
 # What changes from Phase 4 (full_cvae_v2.py):
 #   - Input/output resolution: 64×64 → 128×128
 #   - 5 Conv/ConvTranspose strides instead of 4 (one extra layer at each end)
 #   - Channel progression: [3, 32, 64, 128, 256, 512]  — new 512-ch layer
 #   - ENC_FLAT: 256*4*4=4096 → 512*4*4=8192
-#   - KL: standard with fixed β=0.1 — no free-bits (gradient zeroing in Phase 4
-#     left the encoder passive; low fixed β is simpler and keeps real gradients)
+#   - KL: beta-annealed (0 → target over anneal_epochs) + free-bits per dim
+#     to prevent posterior collapse / KL oscillation seen in first Phase 5 run
+#   - Perceptual loss (VGG relu2_2) integrated from epoch 1 — Phase 6 merged in
+#   - λ_aux raised to 2.0 (from 0.25) for stronger attribute signal at 128px
 #   - Warm-start from Phase 4 checkpoint: inner layers transfer, new 512-ch
 #     layers at encoder top / decoder bottom initialise fresh.
 #   - Everything else (attr embedding, LATENT_DIM, AuxAttrLoss) unchanged.
@@ -27,6 +29,7 @@ LATENT_DIM    = 128
 ATTR_EMB_DIM  = 64
 PHOTO_EMB_DIM = 256
 IMG_SIZE      = 128
+FREE_BITS     = 0.5   # minimum KL per latent dim (nats) to prevent posterior collapse
 
 # 5-stride channel progression: input + 5 output channel counts
 ENC_CHANNELS = [3, 32, 64, 128, 256, 512]
@@ -243,11 +246,14 @@ class AuxAttrLoss(nn.Module):
 # ---------------------------------------------------------------------------
 
 def save_checkpoint(model: FullCVAEv3, optimizer, epoch: int,
-                    history: dict, path: str):
+                    history: dict, path: str, extra: dict = None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save({'epoch': epoch, 'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'history': history, 'beta': model.beta}, path)
+    payload = {'epoch': epoch, 'model': model.state_dict(),
+               'optimizer': optimizer.state_dict(),
+               'history': history, 'beta': model.beta}
+    if extra:
+        payload.update(extra)
+    torch.save(payload, path)
 
 
 def load_checkpoint(path: str, model: FullCVAEv3, optimizer,
@@ -286,19 +292,37 @@ def warmstart_from_phase4(model: FullCVAEv3, phase4_ckpt: str,
 
 
 # ---------------------------------------------------------------------------
-# Training loop — standard KL with fixed beta
+# Training loop — annealed KL + free bits + perceptual loss (Phase 5+6)
 # ---------------------------------------------------------------------------
 
 def train_one_epoch(model: FullCVAEv3, loader: DataLoader,
                     optimizer, device: torch.device,
-                    aux_loss_fn=None, scaler=None) -> dict:
+                    aux_loss_fn=None,
+                    perc_loss_fn=None,
+                    beta: float = None,
+                    free_bits: float = FREE_BITS,
+                    scaler=None) -> dict:
     """
-    Standard KL with model.beta (fixed, no annealing).
-    Free-bits approach from Phase 4 zeroed encoder gradients entirely — this
-    keeps real gradients flowing with a small beta to slow collapse.
+    One training epoch with:
+      - KL annealing: pass the current annealed beta explicitly.
+        Falls back to model.beta if beta is None.
+      - Free bits: each latent dim is clamped to a minimum of free_bits nats
+        before summing, preventing full posterior collapse.
+      - Perceptual loss (Phase 6): if perc_loss_fn is provided, the total
+        reconstruction loss is 0.5 * MSE + 1.0 * perceptual.
+        Otherwise falls back to pure MSE (weight 1.0).
+      - Auxiliary attribute loss: weight controlled by AuxAttrLoss.lam.
+
+    Loss formula:
+        total = 0.5 * mse + 1.0 * perceptual + beta_annealed * kl_free_bits + aux
+
+    Args:
+        beta:      Current annealed beta. If None, uses model.beta.
+        free_bits: Minimum KL per latent dim (nats). 0.5 is a safe default.
     """
     model.train()
-    sums = {'total': 0., 'recon': 0., 'kl': 0., 'aux': 0.}
+    effective_beta = beta if beta is not None else model.beta
+    sums = {'total': 0., 'recon': 0., 'kl': 0., 'aux': 0., 'perc': 0.}
     n = 0
 
     for imgs, attrs in loader:
@@ -308,12 +332,28 @@ def train_one_epoch(model: FullCVAEv3, loader: DataLoader,
 
         with torch.amp.autocast('cuda', enabled=(scaler is not None)):
             recon, mu, logvar = model(imgs, attrs)
-            r_loss = F.mse_loss(recon, imgs, reduction='mean')
-            kl     = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1).mean()
+
+            # Reconstruction: MSE + optional perceptual (Phase 6)
+            mse_loss  = F.mse_loss(recon, imgs, reduction='mean')
+            if perc_loss_fn is not None:
+                p_loss   = perc_loss_fn(recon, imgs)
+                r_loss   = 0.5 * mse_loss + p_loss
+            else:
+                p_loss   = torch.tensor(0., device=device)
+                r_loss   = mse_loss
+
+            # KL with free bits per dim — clamps each dim to >= free_bits nats
+            # before scaling by beta, so the encoder always gets a training signal
+            kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())   # [B, D]
+            kl_per_dim = torch.clamp(kl_per_dim, min=free_bits)
+            kl         = kl_per_dim.sum(dim=1).mean()
+
+            # Auxiliary attribute loss
             a_loss = (aux_loss_fn(recon, attrs)
                       if aux_loss_fn is not None
                       else torch.tensor(0., device=device))
-            loss   = r_loss + model.beta * kl + a_loss
+
+            loss = r_loss + effective_beta * kl + a_loss
 
         if scaler is not None:
             scaler.scale(loss).backward()
@@ -327,9 +367,10 @@ def train_one_epoch(model: FullCVAEv3, loader: DataLoader,
             optimizer.step()
 
         sums['total'] += loss.item()
-        sums['recon'] += r_loss.item()
+        sums['recon'] += mse_loss.item()   # log raw MSE for comparability
         sums['kl']    += kl.item()
         sums['aux']   += a_loss.item()
+        sums['perc']  += p_loss.item()
         n += 1
 
     return {k: v / n for k, v in sums.items()}
