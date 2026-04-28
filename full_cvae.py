@@ -202,7 +202,7 @@ def warmstart_from_phase1(model: FullCVAE, phase1_ckpt_path: str,
                 cur_state[k] = v
                 transferred += 1
 
-    model.load_state_dict(cur_state, strict=False)
+    model.load_state_dict(cur_state)
     return transferred
 
 

@@ -118,7 +118,7 @@ def latent_traversal_figure(model, val_loader, device,
     if attr_names is None:
         attr_names = ["Smiling", "Eyeglasses", "Bangs", "Young", "Blond_Hair"]
 
-    sweep = torch.linspace(0.0, 1.5, steps)  # 0→1 is training range; slight overshoot to 1.5 amplifies effect
+    sweep = torch.linspace(-1.0, 1.0, steps)
     model.eval()
 
     test_img, test_attr = next(iter(val_loader))

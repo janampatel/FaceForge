@@ -83,7 +83,7 @@ class CelebADataset(Dataset):
     def __init__(self, root: str, split: str = "train",
                  download: bool = False, image_size: int = 128, transform=None):
         self.image_size = image_size
-        self.transform  = transform or self._default_transform(image_size, augment=(split == "train"))
+        self.transform  = transform or self._default_transform(image_size)
 
         # NOTE: torchvision CelebA download can fail with "Too many requests" from
         # Google Drive. If that happens, download manually from Kaggle
@@ -97,20 +97,19 @@ class CelebADataset(Dataset):
         )
 
     @staticmethod
-    def _default_transform(image_size: int = 128, augment: bool = False):
+    def _default_transform(image_size: int = 128):
+        # Crop to a slightly larger size first, then center-crop to exact resolution.
+        # This removes the black borders that appear in some CelebA images.
         load_size = int(image_size * 1.125)   # e.g. 72 for 64px, 144 for 128px
-        tfms = [
+        return transforms.Compose([
             transforms.Resize(load_size),
             transforms.CenterCrop(image_size),
-        ]
-        if augment:
-            # Horizontal flip is safe for all 18 selected attributes — none are directional
-            tfms.append(transforms.RandomHorizontalFlip(p=0.5))
-        tfms += [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-        ]
-        return transforms.Compose(tfms)
+            transforms.ToTensor(),           # [0,1]
+            transforms.Normalize(
+                mean=[0.5, 0.5, 0.5],
+                std=[0.5, 0.5, 0.5]          # maps [0,1] -> [-1,1]
+            ),
+        ])
 
     def __len__(self):
         return len(self._celeba)
@@ -276,19 +275,16 @@ if __name__ == "__main__":
         print(f"CelebA not found at {args.root}. Pass --download to download it.")
         exit(1)
 
-    BATCH_SIZE = 64
-    IMAGE_SIZE = 128
     print(f"Building DataLoader from {args.root} ...")
     loader = make_dataloader(root=args.root, split="train",
-                             download=args.download,
-                             batch_size=BATCH_SIZE, image_size=IMAGE_SIZE)
+                             download=args.download, batch_size=64)
 
     images, attrs = next(iter(loader))
     print(f"Image batch shape : {images.shape}  dtype: {images.dtype}")
     print(f"Attr  batch shape : {attrs.shape}   dtype: {attrs.dtype}")
-    assert images.shape == (BATCH_SIZE, 3, IMAGE_SIZE, IMAGE_SIZE), "Unexpected image shape"
-    assert attrs.shape  == (BATCH_SIZE, 18),                        "Unexpected attribute shape"
-    assert attrs.dtype  == torch.float32,                           "Attributes should be float32"
+    assert images.shape == (64, 3, 64, 64), "Unexpected image shape"
+    assert attrs.shape  == (64, 18),        "Unexpected attribute shape"
+    assert attrs.dtype  == torch.float32,   "Attributes should be float32"
 
     visualize_batch(images, attrs, save_path=args.save_grid)
 
