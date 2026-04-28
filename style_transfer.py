@@ -32,7 +32,11 @@ class Cartoonizer:
             p.requires_grad = False
 
     @torch.no_grad()
-    def stylize(self, x: torch.Tensor, out_size: int = 256) -> torch.Tensor:
-        """x: [B, 3, H, W] in [-1, 1] → cartoon [B, 3, out_size, out_size] in [-1, 1]."""
+    def stylize(self, x: torch.Tensor, out_size: int = 512) -> torch.Tensor:
+        """x: [B, 3, H, W] in [-1, 1] → cartoon [B, 3, out_size, out_size] in [-1, 1].
+
+        Default is 512 because face_paint_512_v2 was trained at that resolution;
+        running at 256 discards detail the generator was trained to produce.
+        """
         up = F.interpolate(x, size=out_size, mode="bilinear", align_corners=False)
         return self.model(up)
