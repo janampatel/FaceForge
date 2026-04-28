@@ -29,7 +29,7 @@ LATENT_DIM    = 128
 ATTR_EMB_DIM  = 64
 PHOTO_EMB_DIM = 256
 IMG_SIZE      = 128
-FREE_BITS     = 0.5   # minimum KL per latent dim (nats) to prevent posterior collapse
+FREE_BITS     = 0.1   # minimum KL per latent dim (nats); 0.5 caused floor=64 nats → posterior collapse (Phase 6R fix)
 
 # 5-stride channel progression: input + 5 output channel counts
 ENC_CHANNELS = [3, 32, 64, 128, 256, 512]
@@ -219,7 +219,7 @@ class AuxAttrLoss(nn.Module):
     Gradients flow back to the decoder, enforcing attribute compliance.
     """
 
-    def __init__(self, clip_model, probe, lam: float = 0.25):
+    def __init__(self, clip_model, probe, lam: float = 2.0):
         super().__init__()
         self.clip_model = clip_model
         self.probe      = probe
