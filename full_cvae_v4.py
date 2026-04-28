@@ -519,7 +519,11 @@ def warmstart_from_v3(model: FullCVAEv4, v3_ckpt: str,
 
     Returns number of parameter tensors transferred.
     """
-    v3  = torch.load(v3_ckpt, map_location=device, weights_only=False)['model']
+    raw = torch.load(v3_ckpt, map_location=device, weights_only=False)
+    # Phase 6R saves generator under 'gen'; earlier phases (5, 6) use 'model'
+    v3  = raw.get('gen', raw.get('model'))
+    if v3 is None:
+        raise KeyError(f"Checkpoint has neither 'gen' nor 'model' key: {v3_ckpt}")
     cur = model.state_dict()
     n   = 0
 
